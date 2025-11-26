@@ -1,0 +1,28 @@
+[package]
+name = "nexus-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nexus"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+
+# Local crates
+nexus-core = { path = "../core" }
+nexus-observability = { path = "../observability" }
+
+# CLI specific
+colored = "2.1"
+indicatif = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

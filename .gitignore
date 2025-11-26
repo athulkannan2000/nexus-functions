@@ -1,0 +1,55 @@
+# .gitignore for Nexus Functions
+
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# WASM build artifacts
+*.wasm
+/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# NATS data (local development)
+nats-data/
+jetstream/
+
+# Testing
+coverage/
+*.profraw
+*.profdata
+
+# Documentation build
+/docs/_build/
+/docs/.doctrees/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Project specific
+/examples/*/build/
+/examples/*/target/

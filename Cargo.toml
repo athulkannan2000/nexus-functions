@@ -1,0 +1,62 @@
+[workspace]
+members = ["cli", "core", "runtime", "event-fabric", "api-gateway", "observability"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Nexus Team"]
+license = "Elastic-2.0"
+repository = "https://github.com/nexus-faas/core"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+
+# Web framework
+axum = { version = "0.7", features = ["macros", "json"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# CLI
+clap = { version = "4.4", features = ["derive", "cargo"] }
+
+# WASM Runtime
+wasmtime = "17.0"
+wasmtime-wasi = "17.0"
+
+# Event Bus
+async-nats = "0.33"
+
+# Observability
+opentelemetry = { version = "0.21", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.22"
+
+# Utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+thiserror = "1.0"
+bytes = "1.5"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+
+# Async utilities
+futures = "0.3"
+futures-util = "0.3"
+
+# Configuration
+config = "0.13"
+
+# Testing
+tokio-test = "0.4"
