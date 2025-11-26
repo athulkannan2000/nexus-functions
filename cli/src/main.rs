@@ -143,7 +143,13 @@ async fn main() -> anyhow::Result<()> {
             println!();
             
             // Create application state
-            let app_state = AppState::new(nexus_config, nats_client);
+            let app_state = match AppState::new(nexus_config, nats_client) {
+                Ok(state) => state,
+                Err(e) => {
+                    eprintln!("{} Failed to create application state: {}", "✗".red(), e);
+                    std::process::exit(1);
+                }
+            };
             
             // Start the server
             let server = Server::new(port, app_state);

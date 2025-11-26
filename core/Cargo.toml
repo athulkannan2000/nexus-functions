@@ -21,3 +21,4 @@ chrono.workspace = true
 
 # Local crates
 nexus-event-fabric = { path = "../event-fabric" }
+nexus-runtime = { path = "../runtime" }
