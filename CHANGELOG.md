@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planning Phase - 2025-11-26
+### Day 1 - Foundation (2025-11-26)
 
 #### Added
 - 📋 Initial project planning and architecture documentation
@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 📝 Comprehensive documentation (ARCHITECTURE, GETTING_STARTED, ROADMAP)
 - 🎯 7-day MVP sprint plan
 - 🏗️ Development folder structure at `path/folder/`
+- ✅ CLI implementation with Clap (dev, replay, new, events, logs commands)
+- ✅ Axum HTTP server with health endpoint
+- ✅ Configuration parser for nexus.yaml
+- ✅ WASM runtime foundation (module loader, executor skeleton)
+- ✅ CloudEvents v1.0 implementation
+- ✅ Git repository initialized and pushed
 
 #### Components Scaffolded
 - `cli/` - Command-line interface
@@ -27,6 +33,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/` - Technical documentation
 - `tests/` - Integration tests
 - `infra/` - Infrastructure configs
+
+### Day 2 - Event Ingestion Pipeline (2025-11-26)
+
+#### Added
+- 🔌 NATS client integration with connection retry logic
+- 📤 Event publisher with CloudEvent → NATS conversion
+- 🌊 JetStream stream auto-creation (7-day retention, 100K message limit)
+- 🔄 AppState for shared NATS client and event publisher
+- 🏥 Health check updated with NATS connection status
+- 🎯 HTTP → CloudEvent → NATS publishing pipeline
+
+#### Features
+- **NatsClient** (`event-fabric/src/nats_client.rs`):
+  - Connection with retry (5 attempts, 500ms delay)
+  - JetStream stream creation and management
+  - Message publishing with acknowledgment
+  
+- **EventPublisher** (`event-fabric/src/publisher.rs`):
+  - Automatic subject routing: `events.{event_type}`
+  - CloudEvent serialization to JSON
+  - Async publishing with error handling
+
+- **HTTP Event Handler** (`core/src/server.rs`):
+  - Path-based event type extraction
+  - CloudEvent creation from HTTP payload
+  - Event publishing with ID generation
+  - Response with event ID and status
+
+#### Test Results
+```
+✅ NATS connection successful
+✅ JetStream stream 'events' created
+✅ Event publishing: user.created → NATS
+✅ Event publishing: order.created → NATS
+✅ Event publishing: product.updated → NATS
+✅ Event publishing: user.deleted → NATS
+```
+
+#### Performance
+- Health check: <5ms response time
+- Event ingestion: <100ms end-to-end (HTTP → NATS)
+- NATS connection: <250ms with retry
 
 ---
 

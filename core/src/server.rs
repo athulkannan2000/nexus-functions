@@ -1,30 +1,26 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
+use nexus_event_fabric::CloudEvent;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, error};
 
-use crate::config::NexusConfig;
-
-#[derive(Clone)]
-pub struct ServerState {
-    pub config: Arc<NexusConfig>,
-}
+use crate::state::AppState;
 
 pub struct Server {
     port: u16,
-    state: ServerState,
+    state: AppState,
 }
 
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
     version: String,
+    nats_connected: bool,
 }
 
 #[derive(Deserialize)]
@@ -37,16 +33,11 @@ struct EventPayload {
 struct EventResponse {
     event_id: String,
     status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    function: Option<String>,
+    event_type: String,
 }
 
 impl Server {
-    pub fn new(port: u16, config: NexusConfig) -> Self {
-        let state = ServerState {
-            config: Arc::new(config),
-        };
-
+    pub fn new(port: u16, state: AppState) -> Self {
         Self { port, state }
     }
 
@@ -67,28 +58,45 @@ impl Server {
     }
 }
 
-async fn health_handler() -> Json<HealthResponse> {
+async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
+    let nats_connected = state.nats_client.read().await.is_connected();
+    
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        nats_connected,
     })
 }
 
 async fn event_handler(
-    State(_state): State<ServerState>,
+    State(state): State<AppState>,
+    Path(path): Path<String>,
     Json(payload): Json<EventPayload>,
 ) -> Result<Json<EventResponse>, StatusCode> {
-    info!("Received event: {:?}", payload.data);
+    info!("Received event on path: {}", path);
 
-    // Generate event ID
-    let event_id = uuid::Uuid::new_v4().to_string();
+    // Extract event type from path (e.g., /events/user.created -> com.nexus.user.created)
+    let event_type = format!("com.nexus.{}", path.replace('/', "."));
+    
+    // Create CloudEvent
+    let cloud_event = CloudEvent::new(&event_type, "/api/webhook")
+        .with_data(payload.data);
 
-    // TODO: Publish to NATS
-    // TODO: Trigger function execution
+    let event_id = cloud_event.id.clone();
 
-    Ok(Json(EventResponse {
-        event_id,
-        status: "published".to_string(),
-        function: None,
-    }))
+    // Publish to NATS
+    match state.event_publisher.publish(&cloud_event).await {
+        Ok(_) => {
+            info!("Event {} published successfully", event_id);
+            Ok(Json(EventResponse {
+                event_id,
+                status: "published".to_string(),
+                event_type,
+            }))
+        }
+        Err(e) => {
+            error!("Failed to publish event: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }

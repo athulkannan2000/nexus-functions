@@ -18,3 +18,6 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+
+# Local crates
+nexus-event-fabric = { path = "../event-fabric" }

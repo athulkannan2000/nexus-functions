@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use nexus_core::{NexusConfig, Server};
+use nexus_core::{AppState, NexusConfig, Server};
+use nexus_event_fabric::NatsClient;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Parser)]
 #[command(name = "nexus")]
@@ -105,15 +108,45 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
             
+            // Initialize NATS client
             println!("{} Starting embedded NATS JetStream...", "✓".green());
+            let nats_client = Arc::new(RwLock::new(NatsClient::new()));
+            
+            // Connect to NATS (embedded mode - will connect to local NATS if available)
+            let nats_url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+            
+            {
+                let mut client = nats_client.write().await;
+                match client.connect_with_retry(&nats_url, 5).await {
+                    Ok(_) => {
+                        println!("{} Connected to NATS at {}", "✓".green(), nats_url);
+                        
+                        // Create default stream
+                        if let Err(e) = client.create_stream("events").await {
+                            println!("{} Warning: Failed to create stream: {}", "⚠".yellow(), e);
+                            println!("{} Event replay may not be available", "⚠".yellow());
+                        } else {
+                            println!("{} JetStream stream 'events' ready", "✓".green());
+                        }
+                    }
+                    Err(e) => {
+                        println!("{} Could not connect to NATS: {}", "⚠".yellow(), e);
+                        println!("{} Continuing without event persistence (events will not be replayed)", "⚠".yellow());
+                    }
+                }
+            }
+            
             println!("{} Serving HTTP on http://localhost:{}...", "✓".green(), port);
             println!();
             println!("{}", "Ready to receive events! 🎉".bright_green());
             println!("Press Ctrl+C to stop");
             println!();
             
+            // Create application state
+            let app_state = AppState::new(nexus_config, nats_client);
+            
             // Start the server
-            let server = Server::new(port, nexus_config);
+            let server = Server::new(port, app_state);
             
             tokio::select! {
                 result = server.run() => {
