@@ -22,6 +22,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ✅ CloudEvents v1.0 implementation
 - ✅ Git repository initialized and pushed
 
+### Day 2 - Event Ingestion (2025-11-26)
+
+#### Added
+- ✅ NatsClient with connection retry and stream management
+- ✅ EventPublisher for CloudEvent → NATS publishing
+- ✅ AppState for shared NATS client and event publisher
+- ✅ HTTP webhook endpoint (/webhook/*) to NATS pipeline
+- ✅ Health check with NATS connection status
+- ✅ Automatic subject routing: events.{event_type}
+- ✅ JetStream with 7-day retention and 100K message limit
+
+### Day 3 - Event Replay (2025-11-26)
+
+#### Added
+- ✅ EventStore for querying and retrieving events from JetStream
+- ✅ GET /events/:event_id - Retrieve specific event by ID
+- ✅ GET /events?type=&limit= - List and filter events
+- ✅ POST /replay/:event_id - Replay events to re-trigger functions
+- ✅ POST /events - Root endpoint for generic event publishing
+- ✅ Event count tracking and stream statistics
+
 #### Components Scaffolded
 - `cli/` - Command-line interface
 - `core/` - Core orchestration engine
