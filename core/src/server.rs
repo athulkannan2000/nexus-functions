@@ -5,11 +5,14 @@ use axum::{
     Json, Router,
 };
 use nexus_event_fabric::CloudEvent;
+use nexus_observability::{RequestContext, with_context};
 use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
-use tracing::{info, error};
+use tracing::{info, error, debug, instrument};
 
 use crate::state::AppState;
+use crate::errors::{NexusError, error_response};
+use crate::metrics::ExecutionTimer;
 
 pub struct Server {
     port: u16,
@@ -21,6 +24,7 @@ struct HealthResponse {
     status: String,
     version: String,
     nats_connected: bool,
+    uptime_seconds: u64,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +89,7 @@ impl Server {
     pub async fn run(self) -> anyhow::Result<()> {
         let app = Router::new()
             .route("/health", get(health_handler))
+            .route("/metrics", get(metrics_handler))
             .route("/events", get(list_events_handler).post(event_handler_root))
             .route("/events/:event_id", get(get_event_handler))
             .route("/replay/:event_id", post(replay_handler))
@@ -103,22 +108,46 @@ impl Server {
     }
 }
 
+#[instrument(skip(state))]
 async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
     let nats_connected = state.nats_client.read().await.is_connected();
+    let uptime = state.start_time.elapsed().as_secs();
+    
+    // Update metrics
+    state.metrics.set_nats_connected(nats_connected).await;
+    state.metrics.update_uptime(uptime).await;
+    
+    debug!("Health check: nats_connected={}, uptime={}s", nats_connected, uptime);
     
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         nats_connected,
+        uptime_seconds: uptime,
     })
 }
 
+#[instrument(skip(state))]
+async fn metrics_handler(State(state): State<AppState>) -> Json<crate::metrics::Metrics> {
+    let uptime = state.start_time.elapsed().as_secs();
+    state.metrics.update_uptime(uptime).await;
+    
+    let metrics = state.metrics.get_metrics().await;
+    debug!("Metrics retrieved: {:?}", metrics);
+    
+    Json(metrics)
+}
+
+#[instrument(skip(state, payload), fields(path, event_type, event_id))]
 async fn event_handler(
     State(state): State<AppState>,
     Path(path): Path<String>,
     Json(payload): Json<EventPayload>,
-) -> Result<Json<EventResponse>, StatusCode> {
-    info!("Received event on path: {}", path);
+) -> Result<Json<EventResponse>, (StatusCode, Json<crate::errors::ErrorResponse>)> {
+    let ctx = RequestContext::new();
+    with_context(&ctx);
+    
+    info!(path = %path, "Received event on webhook path");
 
     // Extract event type from path (e.g., /webhook/user.created -> com.nexus.user.created)
     let event_type = format!("com.nexus.{}", path.replace('/', "."));
@@ -128,22 +157,42 @@ async fn event_handler(
         .with_data(payload.data);
 
     let event_id = cloud_event.id.clone();
+    tracing::Span::current().record("event_type", &event_type.as_str());
+    tracing::Span::current().record("event_id", &event_id.as_str());
 
     // Publish to NATS
     match state.event_publisher.publish(&cloud_event).await {
         Ok(_) => {
-            info!("Event {} published successfully", event_id);
+            state.metrics.increment_events_published().await;
+            info!(event_id = %event_id, event_type = %event_type, "Event published successfully");
             
             // Execute matching functions asynchronously (fire and forget)
             let executor = state.function_executor.clone();
             let event_clone = cloud_event.clone();
+            let metrics = state.metrics.clone();
+            
             tokio::spawn(async move {
+                let timer = ExecutionTimer::start();
                 match executor.execute_matching_functions(&event_clone).await {
                     Ok(results) => {
-                        info!("Executed {} function(s) for event {}", results.len(), event_clone.id);
+                        let duration = timer.elapsed_ms();
+                        metrics.record_function_execution(duration, true).await;
+                        info!(
+                            event_id = %event_clone.id,
+                            functions_executed = results.len(),
+                            duration_ms = duration,
+                            "Functions executed successfully"
+                        );
                     }
                     Err(e) => {
-                        error!("Function execution failed for event {}: {}", event_clone.id, e);
+                        let duration = timer.elapsed_ms();
+                        metrics.record_function_execution(duration, false).await;
+                        error!(
+                            event_id = %event_clone.id,
+                            error = %e,
+                            duration_ms = duration,
+                            "Function execution failed"
+                        );
                     }
                 }
             });
@@ -155,8 +204,14 @@ async fn event_handler(
             }))
         }
         Err(e) => {
-            error!("Failed to publish event: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            state.metrics.increment_events_failed().await;
+            error!(event_id = %event_id, error = %e, "Failed to publish event");
+            Err(error_response(
+                NexusError::NatsError {
+                    message: format!("Failed to publish event: {}", e),
+                },
+                Some(ctx.trace_id)
+            ))
         }
     }
 }
@@ -203,24 +258,39 @@ async fn event_handler_root(
     }
 }
 
+#[instrument(skip(state), fields(event_id))]
 async fn get_event_handler(
     State(state): State<AppState>,
     Path(event_id): Path<String>,
-) -> Result<Json<CloudEvent>, StatusCode> {
-    info!("Retrieving event: {}", event_id);
+) -> Result<Json<CloudEvent>, (StatusCode, Json<crate::errors::ErrorResponse>)> {
+    let ctx = RequestContext::new().with_event_id(event_id.clone());
+    with_context(&ctx);
+    
+    debug!(event_id = %event_id, "Retrieving event");
 
     match state.event_store.get_event_by_id(&event_id).await {
         Ok(Some(event)) => {
-            info!("Event {} retrieved", event_id);
+            info!(event_id = %event_id, event_type = %event.event_type, "Event retrieved");
             Ok(Json(event))
         }
         Ok(None) => {
-            info!("Event {} not found", event_id);
-            Err(StatusCode::NOT_FOUND)
+            info!(event_id = %event_id, "Event not found");
+            Err(error_response(
+                NexusError::NotFound {
+                    resource: "Event".to_string(),
+                    id: event_id,
+                },
+                Some(ctx.trace_id)
+            ))
         }
         Err(e) => {
-            error!("Failed to retrieve event: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            error!(event_id = %event_id, error = %e, "Failed to retrieve event");
+            Err(error_response(
+                NexusError::InternalError {
+                    message: format!("Failed to retrieve event: {}", e),
+                },
+                Some(ctx.trace_id)
+            ))
         }
     }
 }
@@ -263,43 +333,73 @@ async fn list_events_handler(
     }
 }
 
+#[instrument(skip(state), fields(event_id))]
 async fn replay_handler(
     State(state): State<AppState>,
     Path(event_id): Path<String>,
-) -> Result<Json<ReplayResponse>, StatusCode> {
-    info!("Replaying event: {}", event_id);
+) -> Result<Json<ReplayResponse>, (StatusCode, Json<crate::errors::ErrorResponse>)> {
+    let ctx = RequestContext::new().with_event_id(event_id.clone());
+    with_context(&ctx);
+    
+    info!(event_id = %event_id, "Replaying event");
 
     // First, retrieve the event
     let event = match state.event_store.get_event_by_id(&event_id).await {
         Ok(Some(event)) => event,
         Ok(None) => {
-            return Ok(Json(ReplayResponse {
-                event_id,
-                status: "not_found".to_string(),
-                message: "Event not found".to_string(),
-            }));
+            info!(event_id = %event_id, "Event not found for replay");
+            return Err(error_response(
+                NexusError::NotFound {
+                    resource: "Event".to_string(),
+                    id: event_id,
+                },
+                Some(ctx.trace_id)
+            ));
         }
         Err(e) => {
-            error!("Failed to retrieve event for replay: {}", e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            error!(event_id = %event_id, error = %e, "Failed to retrieve event for replay");
+            return Err(error_response(
+                NexusError::InternalError {
+                    message: format!("Failed to retrieve event: {}", e),
+                },
+                Some(ctx.trace_id)
+            ));
         }
     };
 
     // Re-publish the event to NATS
     match state.event_publisher.publish(&event).await {
         Ok(_) => {
-            info!("Event {} replayed successfully", event_id);
+            state.metrics.increment_events_replayed().await;
+            info!(event_id = %event_id, event_type = %event.event_type, "Event replayed successfully");
             
             // Execute functions asynchronously
             let executor = state.function_executor.clone();
             let event_clone = event.clone();
+            let metrics = state.metrics.clone();
+            
             tokio::spawn(async move {
+                let timer = ExecutionTimer::start();
                 match executor.execute_matching_functions(&event_clone).await {
                     Ok(results) => {
-                        info!("Replayed event {} triggered {} function(s)", event_clone.id, results.len());
+                        let duration = timer.elapsed_ms();
+                        metrics.record_function_execution(duration, true).await;
+                        info!(
+                            event_id = %event_clone.id,
+                            functions_executed = results.len(),
+                            duration_ms = duration,
+                            "Replayed event triggered functions"
+                        );
                     }
                     Err(e) => {
-                        error!("Function execution failed for replayed event {}: {}", event_clone.id, e);
+                        let duration = timer.elapsed_ms();
+                        metrics.record_function_execution(duration, false).await;
+                        error!(
+                            event_id = %event_clone.id,
+                            error = %e,
+                            duration_ms = duration,
+                            "Function execution failed for replayed event"
+                        );
                     }
                 }
             });
@@ -311,8 +411,14 @@ async fn replay_handler(
             }))
         }
         Err(e) => {
-            error!("Failed to replay event: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            state.metrics.increment_events_failed().await;
+            error!(event_id = %event_id, error = %e, "Failed to replay event");
+            Err(error_response(
+                NexusError::NatsError {
+                    message: format!("Failed to replay event: {}", e),
+                },
+                Some(ctx.trace_id)
+            ))
         }
     }
 }
