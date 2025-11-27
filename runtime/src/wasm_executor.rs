@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use wasmtime::*;
 use wasmtime_wasi::WasiCtxBuilder;
 
-/// Executes WASM modules with WASI support
+/// Executes WASM modules with WASI support and module caching
 pub struct WasmExecutor {
     engine: Engine,
+    module_cache: Arc<Mutex<HashMap<String, Module>>>,
 }
 
 struct WasmState {
@@ -23,13 +25,51 @@ impl WasmExecutor {
         
         let engine = Engine::new(&config)?;
         
-        Ok(Self { engine })
+        Ok(Self {
+            engine,
+            module_cache: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    /// Get or compile a WASM module with caching
+    fn get_or_compile_module(&self, module_bytes: &[u8], cache_key: &str) -> Result<Module> {
+        let mut cache = self.module_cache.lock().unwrap();
+        
+        if let Some(module) = cache.get(cache_key) {
+            tracing::debug!("Using cached WASM module: {}", cache_key);
+            return Ok(module.clone());
+        }
+        
+        tracing::info!("Compiling WASM module: {}", cache_key);
+        let module = Module::new(&self.engine, module_bytes)
+            .context("Failed to compile WASM module")?;
+        
+        cache.insert(cache_key.to_string(), module.clone());
+        tracing::info!("Cached WASM module: {} (cache size: {})", cache_key, cache.len());
+        
+        Ok(module)
+    }
+
+    /// Clear the module cache
+    pub fn clear_cache(&self) {
+        let mut cache = self.module_cache.lock().unwrap();
+        let size = cache.len();
+        cache.clear();
+        tracing::info!("Cleared WASM module cache ({} modules removed)", size);
+    }
+
+    /// Get cache statistics
+    pub fn cache_stats(&self) -> (usize, Vec<String>) {
+        let cache = self.module_cache.lock().unwrap();
+        let keys: Vec<String> = cache.keys().cloned().collect();
+        (cache.len(), keys)
     }
 
     /// Execute a WASM module with input data
     pub async fn execute(&self, module_bytes: &[u8], input: &[u8]) -> Result<Vec<u8>> {
-        let module = Module::new(&self.engine, module_bytes)
-            .context("Failed to compile WASM module")?;
+        // Create cache key from module hash
+        let cache_key = format!("module_{:x}", md5::compute(module_bytes));
+        let module = self.get_or_compile_module(module_bytes, &cache_key)?;
 
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::add_to_linker(&mut linker, |s: &mut WasmState| &mut s.wasi)?;
@@ -85,8 +125,9 @@ impl WasmExecutor {
         func_name: &str,
         input: &[u8],
     ) -> Result<Vec<u8>> {
-        let module = Module::new(&self.engine, module_bytes)
-            .context("Failed to compile WASM module")?;
+        // Create cache key from module hash and function name
+        let cache_key = format!("module_{:x}_{}", md5::compute(module_bytes), func_name);
+        let module = self.get_or_compile_module(module_bytes, &cache_key)?;
 
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::add_to_linker(&mut linker, |s: &mut WasmState| &mut s.wasi)?;
