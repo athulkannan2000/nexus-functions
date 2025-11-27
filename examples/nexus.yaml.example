@@ -1,0 +1,27 @@
+version: v1
+
+# Example Nexus Functions configuration file
+# Copy this to nexus.yaml and customize for your functions
+
+functions:
+  - name: hello-world
+    on:
+      http:
+        method: POST
+        path: /events/hello
+    runtime: wasi-preview1
+    code: ./build/handler.wasm
+    timeout: 5s
+    memory: 128Mi
+    
+  - name: user-welcome
+    on:
+      http:
+        method: POST
+        path: /events/user.created
+    runtime: wasi-preview1
+    code: ./build/welcome.wasm
+    timeout: 5s
+    memory: 128Mi
+    env:
+      LOG_LEVEL: info
