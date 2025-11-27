@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: nexus-nats-dev
+    command: 
+      - "-js"
+      - "-m"
+      - "8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    networks:
+      - nexus-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexus-functions-dev
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=debug
+      - NEXUS_HOST=0.0.0.0
+      - NEXUS_PORT=8080
+      - NATS_URL=nats://nats:4222
+    volumes:
+      # Hot-reload support - mount source directories
+      - ./functions:/app/functions
+      - ./nexus.yaml:/app/nexus.yaml
+    networks:
+      - nexus-network
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  nexus-network:
+    driver: bridge

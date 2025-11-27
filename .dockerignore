@@ -1,0 +1,52 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Target directory
+target/
+**/target/
+
+# NATS data
+nats-data/
+**/nats-data/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test files
+test_*.ps1
+test_*.sh
+
+# CI/CD
+.github/
+
+# Examples
+examples/
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Azure
+.azure/

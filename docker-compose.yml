@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # NATS JetStream Server
+  nats:
+    image: nats:2.10-alpine
+    container_name: nexus-nats
+    command: 
+      - "-js"
+      - "-m"
+      - "8222"
+      - "-sd"
+      - "/data"
+      - "--max_memory_store"
+      - "1GB"
+      - "--max_file_store"
+      - "10GB"
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP monitoring
+      - "6222:6222"  # Cluster routing (for future clustering)
+    volumes:
+      - nats-data:/data
+    networks:
+      - nexus-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Nexus Functions Server
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexus-functions
+    ports:
+      - "8080:8080"  # Nexus HTTP API
+    environment:
+      - RUST_LOG=info
+      - NEXUS_HOST=0.0.0.0
+      - NEXUS_PORT=8080
+      - NATS_URL=nats://nats:4222
+      - NEXUS_FUNCTIONS_DIR=/app/functions
+    volumes:
+      # Mount function directory (for WASM modules)
+      - ./functions:/app/functions:ro
+      # Mount configuration file (optional)
+      - ./nexus.yaml:/app/nexus.yaml:ro
+    networks:
+      - nexus-network
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  nats-data:
+    driver: local
+
+networks:
+  nexus-network:
+    driver: bridge
